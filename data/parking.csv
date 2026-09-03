@@ -1,0 +1,10 @@
+﻿scenario,parking_id,parking_name,location_type,base_capacity,effective_capacity,num_checkin_gates,num_checkout_gates,checkin_time_sec,checkout_time_sec,preference_weight,distance_to_lecture_m,notes
+Normal,P1,Nha xe A2 (trong truong),in_campus,3000,3000,2,2,3,10,0.42,150,"Van hanh binh thuong, du cong suat"
+Normal,P2,Nha xe B-C-D (trong truong),in_campus,3000,3000,2,2,3,10,0.42,200,"Van hanh binh thuong, du cong suat"
+Normal,P3,Nha xe Ky tuc xa (ngoai khu giang duong),dormitory,6000,6000,2,2,3,10,0.16,650,It SV lua chon do xa giang duong
+Peak,P1,Nha xe A2 (trong truong),in_campus,3000,3000,2,2,3,10,0.45,150,SV don sang P1/P2 vi ngai di xa trong tuan cao diem
+Peak,P2,Nha xe B-C-D (trong truong),in_campus,3000,3000,2,2,3,10,0.43,200,SV don sang P1/P2 vi ngai di xa trong tuan cao diem
+Peak,P3,Nha xe Ky tuc xa (ngoai khu giang duong),dormitory,6000,6000,2,2,3,10,0.12,650,Ty le chon giam vi SV uu tien gan giang duong khi lich day
+WorstCase,P1,Nha xe A2 (trong truong),in_campus,3000,2500,2,2,3,14,0.47,150,Reserve 500 cho khu vuc Ngay hoi tuyen sinh; mua lam checkout cham hon (14s do thao tac tien mat + ao mua)
+WorstCase,P2,Nha xe B-C-D (trong truong),in_campus,3000,3000,2,1,3,14,0.43,200,"1 cong checkout ngung hoat dong (ngap nuoc/mat dien khu vuc cong), mua lam checkout cham hon"
+WorstCase,P3,Nha xe Ky tuc xa (ngoai khu giang duong),dormitory,6000,6000,2,2,4,14,0.1,650,"SV cang ngai di xa hon trong mua lon, ty le chon giam manh; checkin/checkout cham hon do mua"
