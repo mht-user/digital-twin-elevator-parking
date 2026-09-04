@@ -6,7 +6,7 @@ Hệ thống mô phỏng dòng lưu chuyển của sinh viên nhằm phát hiệ
 ## Cấu trúc thư mục
 - `/docs`: Tài liệu đặc tả hệ thống (SRS), Test Plan.
 - `/data`: Dataset giả lập (danh sách lớp, sức chứa nhà xe).
-- `/simulation`: Logic chạy mô phỏng.
+- `/se-simulation`: Logic chạy mô phỏng.
 - `/optimization`: Thuật toán tính toán kịch bản tối ưu.
 - `/frontend`: Giao diện Dashboard tương tác.
 - `main.py`: Script điều phối và chạy kịch bản mô phỏng chính.
