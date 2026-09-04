@@ -1,0 +1,10 @@
+﻿scenario,parking_lot_id,name,nearest_buildings,capacity_slots,checkin_gates_open,checkout_gates_open,checkin_sec_per_vehicle,checkout_sec_per_vehicle,max_checkin_throughput_veh_per_30min,max_checkout_throughput_veh_per_30min,notes
+Normal,P1,Nha xe khu giang duong A2-B,A2;B,3000,2,2,3,10,1200,360,Hoat dong binh thuong
+Normal,P2,Nha xe khu giang duong C-D,C;D,3000,2,2,3,10,1200,360,Hoat dong binh thuong
+Normal,P3,Nha xe khu KTX,KTX (xa cac toa giang duong),6000,2,2,3,10,1200,360,Hoat dong binh thuong
+Peak,P1,Nha xe khu giang duong A2-B,A2;B,3000,2,2,3,10,1200,360,"Ngay cao diem dau/giua tuan (T2, T4), luong SV vao/ra dong vao dau Ca1 va Ca3"
+Peak,P2,Nha xe khu giang duong C-D,C;D,3000,2,2,3,10,1200,360,"Ngay cao diem dau/giua tuan (T2, T4), luong SV vao/ra dong vao dau Ca1 va Ca3"
+Peak,P3,Nha xe khu KTX,KTX (xa cac toa giang duong),6000,2,2,3,10,1200,360,"Ngay cao diem dau/giua tuan (T2, T4), luong SV vao/ra dong vao dau Ca1 va Ca3"
+Worst,P1,Nha xe khu giang duong A2-B,A2;B,3000,2,1,4,13,900,138,"Trung lich thi giua ky + troi mua (SV di xe may tang, thao ao mua lam cham thao tac) + 1 cong check-out P1 dang bao tri"
+Worst,P2,Nha xe khu giang duong C-D,C;D,3000,2,2,4,12,900,300,"Trung lich thi giua ky + troi mua (SV di xe may tang, thao ao mua lam cham thao tac)"
+Worst,P3,Nha xe khu KTX,KTX (xa cac toa giang duong),6000,2,2,4,12,900,300,"Trung lich thi giua ky + troi mua (SV di xe may tang, thao ao mua lam cham thao tac)"
