@@ -30,39 +30,52 @@ chung 1 phòng trong cùng (ngày, ca); không có lớp nào vượt sức ch�
 SV đến trước giờ học 30 phút, rời trường trong vòng 30 phút sau khi tan ca (giả thiết). 
 
 ## 3. Sinh viên & phương tiện
-- `motorbike_ratio` (0.75–0.95/lớp), `dorm_ratio` (0.05–0.25/lớp): thuộc tính từng lớp học phần,
-  dùng để quy đổi sĩ số ra số xe máy cần gửi.
+- `motorbike_ratio` (0.75–0.95/lớp): tỷ lệ SV của lớp sử dụng xe máy đến trường. Core simulation tính `total_motorbikes = num_students × motorbike_ratio`.
+- `dorm_ratio` (0.05–0.25/lớp): tỷ lệ SV của lớp đang ở KTX; hiện chỉ giữ làm metadata/tham số mở rộng và **không tham gia** phép tính số xe trong core simulation.
 - Nhà xe chỉ nhận xe máy, chưa tính ô tô.
 - `events.csv` có thêm `motorbike_ratio` riêng cho từng sự kiện — dữ liệu cần thiết để simulation
   chạy được, không phải một suy diễn về mức độ tắc.
-- Việc SV thích gửi xe ở P1/P2 hơn P3 dù ở KTX là hành vi cần được Simulation/Optimization
-  Engineer tự mô hình hoá; dataset chỉ cung cấp nguyên liệu thô (sĩ số, tỷ lệ xe máy, tỷ lệ SV ở
-  KTX, khoảng cách từng toà đến từng nhà xe ở mục 5), không áp sẵn tỷ lệ phân bổ vào từng nhà xe.
+- Việc phân bổ xe vào P1/P2/P3/P4 là hành vi cần được Simulation Engineer mô hình hoá. Dataset chỉ cung cấp nguyên liệu thô (sĩ số, `motorbike_ratio`, building và khoảng cách từng toà đến từng nhà xe), không áp sẵn tỷ lệ phân bổ. Với core simulation, nên dùng một rule deterministic dựa trên khoảng cách để kết quả Before/After có thể so sánh ổn định.
 
 ## 4. Nhà xe — hạ tầng & khoảng cách vật lý (`parking.csv`)
-| Nhà xe | Phục vụ khu vực | Sức chứa | Cổng vào/ra (Normal) | Thời gian/lượt (Normal) |
-|---|---|---|---|---|
-| P1 | Gần toà A2, B | 3.000 xe | 2 vào / 2 ra | Vào 3s (quẹt vé) / Ra 10s (thu tiền mặt) |
-| P2 | Gần toà C, D | 3.000 xe | 2 vào / 2 ra | Vào 3s / Ra 10s |
-| P3 | Gần khu KTX | 6.000 xe | 2 vào / 2 ra | Vào 3s / Ra 10s |
+Các nhà xe được đặt ID theo đúng số thứ tự đã khoanh trên sơ đồ tham chiếu NEU do nhóm sử dụng:
 
-Khoảng cách đi bộ ước lượng (mét) từ mỗi toà đến mỗi nhà xe:
+| ID | Tên trong dataset | Vị trí tương đối trên sơ đồ | Sức chứa giả định |
+|---|---|---|---:|
+| P1 | Nha de xe so 1 | Bãi phía dưới khu giảng đường, gần cụm C/D | 3.000 xe |
+| P2 | Nha de xe so 2 | Bãi dạng chữ L ở khu trung tâm, sát cụm B/D và gần A2 | 3.000 xe |
+| P3 | Nha de xe so 3 | Bãi phía bên phải sơ đồ, gần khu Nhà 12 | 6.000 xe |
+| P4 | Nha de xe so 4 | Bãi phía đông khu giảng đường, gần B2/cổng đi bộ | 3.000 xe |
 
-| Từ toà \ Đến nhà xe | P1 | P2 | P3 |
+Sức chứa vẫn là **tham số synthetic** của mô hình. Sơ đồ tham chiếu được dùng để chỉnh lại tên, vị trí tương đối và khoảng cách; không dùng để suy ra sức chứa thật.
+
+### Khoảng cách ước lượng từ toà học tới nhà xe
+Khoảng cách được ước lượng theo **tỷ lệ tương đối trên sơ đồ**, lấy mốc người dùng đề xuất `P1 -> A2 ≈ 200 m`, rồi làm tròn về bội số 10 m. Do sơ đồ không phải bản đồ đo đạc theo tỷ lệ chuẩn, các số này chỉ dùng cho mô phỏng hành vi chọn bãi.
+
+| Từ toà \ Đến nhà xe | P1 | P2 | P3 | P4 |
+|---|---:|---:|---:|---:|
+| A2 | 200m | 100m | 300m | 200m |
+| B  | 120m | 40m  | 240m | 120m |
+| C  | 60m  | 100m | 200m | 100m |
+| D  | 80m  | 40m  | 240m | 140m |
+
+Các giá trị trên nằm trực tiếp trong `parking.csv` ở các cột `dist_from_A2_m`, `dist_from_B_m`, `dist_from_C_m`, `dist_from_D_m`.
+
+Core Simulation nên phân bổ `total_motorbikes = num_students × motorbike_ratio` vào P1-P4 bằng một rule **deterministic** dựa trên khoảng cách. Gợi ý:
+
+`weight_i = (1 / distance_i) / sum_j(1 / distance_j)`
+
+`vehicles_i = total_motorbikes × weight_i`
+
+Như vậy bãi gần hơn nhận tỷ trọng cao hơn, và cùng một input luôn cho cùng một kết quả Before/After.
+
+### `scenario` trong `parking.csv` — chỉ là điều kiện vận hành hạ tầng
+| scenario | Cổng vào/ra | Thời gian xử lý/xe | Diễn giải |
 |---|---|---|---|
-| A2 | 150m | 650m | 900m |
-| B  | 100m | 600m | 850m |
-| C  | 650m | 120m | 820m |
-| D  | 700m | 180m | 780m |
+| **Normal** | 2/2 ở P1-P4 | 3s vào / 10s ra | Vận hành tiêu chuẩn |
+| **Worst** | P1 còn 1/2 cổng ra; P2-P4 vẫn 2/2 | 4s vào / 12–13s ra | Thời tiết bất lợi + sự cố hạ tầng; có thể kết hợp `events.csv` khi stress test |
 
-### Cột `scenario` trong `parking.csv` — chỉ còn 2 mức điều kiện vận hành hạ tầng
-| scenario | Số cổng vào/ra | Thời gian xử lý/xe | Diễn giải |
-|---|---|---|---|
-| **Normal** | 2/2 mỗi nhà xe | 3s vào / 10s ra | Vận hành tiêu chuẩn |
-| **Worst** | P1 còn 1/2 cổng ra (bảo trì); P2, P3 vẫn 2/2 | 4s vào / 12–13s ra (mưa) | Có sự cố hạ tầng + yếu tố thời tiết bất lợi, dùng khi mô phỏng kịch bản xấu (kết hợp thêm `events.csv` nếu muốn) |
-
-3 mức này **không gắn với ngày cụ thể nào** trong `schedule.csv`. Simulation Engineer tự quyết
-định dùng thông số `Normal` hay `Worst` cho khung (ngày, ca) đang mô phỏng, tuỳ giả định kịch bản.
+Hai mức này **không gắn với ngày cụ thể** trong `schedule.csv`. Peak/Bottleneck phải được Simulation Engineer suy ra từ demand và năng lực xử lý, không phải nhãn do Data Engineer gắn sẵn.
 
 ## 5. `events.csv` — Sự kiện phát sinh ngoài lịch thường lệ
 24 ca thi giữa kỳ (ví dụ điển hình cho sự kiện gây tăng đột biến nhu cầu): `event_id`, `event_name`,
@@ -75,8 +88,8 @@ vì ở mức mô phỏng nhà xe chỉ cần biết toà và số SV là đủ.
 classes.csv (class_id) ──┐
                           ├──< schedule.csv >──┐
 rooms.csv (room_id) ─────┘                     │
-                                                 └── (building) ── parking.csv (khoảng cách)
-events.csv (độc lập, building) ── (building) ── parking.csv (khoảng cách)
+                                                 └── (building) ── parking.csv (P1-P4, khoảng cách)
+events.csv (độc lập, building) ── (building) ── parking.csv (P1-P4, khoảng cách)
 ```
 
 - `schedule.csv.class_id` → khoá ngoại tới `classes.csv.class_id`
