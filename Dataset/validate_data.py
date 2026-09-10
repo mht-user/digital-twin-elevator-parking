@@ -99,11 +99,35 @@ for r in parking:
     if co != int(r['max_checkout_throughput_veh_per_30min']):
         err(f'parking {r["scenario"]}/{r["parking_lot_id"]}: checkout throughput inconsistent')
 
+# Parking composite-key uniqueness and metadata consistency across scenarios
+seen_parking_keys = set()
+parking_meta = {}
+for r in parking:
+    key = (r['scenario'], r['parking_lot_id'])
+    if key in seen_parking_keys:
+        err(f'parking.csv duplicate (scenario, parking_lot_id): {key}')
+    seen_parking_keys.add(key)
+
+    lot = r['parking_lot_id']
+    if lot in {'P1','P2','P3','P4'}:
+        expected_name = f'Nha de xe so {lot[1:]}'
+        if r.get('name') != expected_name:
+            err(f'parking {r["scenario"]}/{lot}: name={r.get("name")} expected={expected_name}')
+
+    meta = (
+        r.get('name'), r.get('capacity_slots'),
+        r.get('dist_from_A2_m'), r.get('dist_from_B_m'),
+        r.get('dist_from_C_m'), r.get('dist_from_D_m')
+    )
+    if lot in parking_meta and parking_meta[lot] != meta:
+        err(f'parking {lot}: name/capacity/distances differ between Normal and Worst')
+    parking_meta[lot] = meta
+
 if set(scen_lots) != {'Normal','Worst'}:
     err(f'parking.csv scenarios must be exactly Normal and Worst, got {sorted(scen_lots)}')
 for scenario in ['Normal','Worst']:
-    if scen_lots.get(scenario) != {'P1','P2','P3'}:
-        err(f'{scenario}: parking lots must be P1/P2/P3')
+    if scen_lots.get(scenario) != {'P1','P2','P3','P4'}:
+        err(f'{scenario}: parking lots must be P1/P2/P3/P4')
 
 # Event basic validation
 valid_buildings = {'A2','B','C','D'}
@@ -119,7 +143,7 @@ for r in events:
     if not (0 <= float(r['motorbike_ratio']) <= 1):
         err(f'event {r["event_id"]}: invalid motorbike_ratio')
 
-print('DATASET VALIDATION — Digital Twin Lite v1.0')
+print('DATASET VALIDATION — Digital Twin Lite FINAL')
 print('-' * 52)
 print(f'classes : {len(classes)}')
 print(f'schedule: {len(schedule)}')
