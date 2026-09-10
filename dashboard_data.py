@@ -7,11 +7,6 @@ ban da sua loi) thanh dung 3 khoi du lieu Front-end can:
     - kpi          -> "KPI"
     - parking_view -> "Parking View"
 
-LUU Y QUAN TRONG (bao lai nhom):
-    Ban run_simulation.py hien tai KHONG doc events.csv, chi dung
-    schedule.csv -> demand se thieu phan phat sinh tu 24 ca thi giua
-    ky trong events.csv. Wrapper nay van chay duoc, nhung ket qua se
-    thieu phan events cho toi khi Simulation Engineer bo sung lai.
 
 Cach chay:
     python3 dashboard_data.py --scenario Normal --direction checkin
