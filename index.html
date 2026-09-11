@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Digital Twin Lite - NEU Campus Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            darkbg: '#0a0f18',
+            darkpanel: '#111827',
+            darkborder: '#1f293d',
+            accentcyan: '#00f2fe',
+            accentblue: '#3b82f6',
+            dangerred: '#ef4444',
+            warnamber: '#f59e0b',
+            safegreen: '#10b981'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0a0f18; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0a0f18; }
+    ::-webkit-scrollbar-thumb { background: #1f293d; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #374151; }
+  </style>
+</head>
+<body class="text-slate-100 min-h-screen p-4 md:p-6 lg:p-8">
+
+  <!-- TOP HEADER -->
+  <header class="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-darkborder mb-6 gap-4">
+    <div>
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+          <i class="fa-solid fa-graduation-cap text-lg"></i>
+        </div>
+        <div>
+          <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">NEU Digital Twin - Parking & Schedule Analytics</h1>
+          <p class="text-xs text-slate-400">Hệ thống giám sát tải trọng lịch học và bãi xe sinh viên ĐH Kinh tế Quốc dân</p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Scenario & Direction Selectors -->
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="flex items-center gap-2 bg-slate-900 border border-darkborder px-3 py-1.5 rounded-lg text-xs">
+        <span class="text-slate-400">Kịch bản:</span>
+        <select id="scenario-selector" onchange="fetchDashboardData()" class="bg-transparent text-cyan-400 font-bold outline-none cursor-pointer">
+          <option value="Normal" class="bg-slate-900 text-slate-200">Normal (Tiêu chuẩn)</option>
+          <option value="Worst" class="bg-slate-900 text-slate-200">Worst (Mưa / Cổng bảo trì)</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-2 bg-slate-900 border border-darkborder px-3 py-1.5 rounded-lg text-xs">
+        <span class="text-slate-400">Luồng xe:</span>
+        <select id="direction-selector" onchange="fetchDashboardData()" class="bg-transparent text-amber-400 font-bold outline-none cursor-pointer">
+          <option value="checkin" class="bg-slate-900 text-slate-200">Check-in (Đầu ca)</option>
+          <option value="checkout" class="bg-slate-900 text-slate-200">Check-out (Tan ca)</option>
+        </select>
+      </div>
+
+      <button onclick="fetchDashboardData()" class="px-3 py-1.5 text-xs font-semibold bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 rounded-lg border border-cyan-500/30 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-rotate"></i> Làm mới
+      </button>
+    </div>
+  </header>
+
+  <!-- 5 KPI CARDS -->
+  <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+    <!-- Total Sessions -->
+    <div class="bg-darkpanel border border-darkborder rounded-xl p-4">
+      <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Total Sessions</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <div class="text-2xl font-extrabold text-white" id="kpi-sessions">--</div>
+        <div class="text-xs text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">Lớp ca học</div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">Dữ liệu từ schedule.csv</div>
+    </div>
+
+    <!-- Total Students -->
+    <div class="bg-darkpanel border border-darkborder rounded-xl p-4">
+      <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Total Students</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <div class="text-2xl font-extrabold text-cyan-400" id="kpi-students">--</div>
+        <div class="text-xs text-emerald-400 font-semibold"><i class="fa-solid fa-users"></i> Lượt SV</div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">Tổng lưu lượng tuần</div>
+    </div>
+
+    <!-- Peak Demand -->
+    <div class="bg-darkpanel border border-darkborder rounded-xl p-4">
+      <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Peak Demand</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <div class="text-2xl font-extrabold text-amber-400" id="kpi-peak-demand">--</div>
+        <div class="text-xs text-amber-300 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-800/30">Nhu cầu SV đỉnh</div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1" id="kpi-peak-demand-sub">--</div>
+    </div>
+
+    <!-- Worst Parking -->
+    <div class="bg-darkpanel border border-rose-900/40 rounded-xl p-4">
+      <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Worst Parking</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <div class="text-2xl font-extrabold text-rose-500" id="kpi-worst-parking">--</div>
+        <span class="text-xs px-2 py-0.5 rounded bg-rose-950/60 border border-rose-800 text-rose-400 font-bold" id="kpi-worst-rate">--%</span>
+      </div>
+      <div class="text-[11px] text-rose-400/80 mt-1" id="kpi-worst-parking-sub">Bãi xe quá tải cao nhất</div>
+    </div>
+
+    <!-- Worst Day (Time) -->
+    <div class="bg-darkpanel border border-amber-900/40 rounded-xl p-4">
+      <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Worst Day (Time)</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <div class="text-xl font-extrabold text-amber-300" id="kpi-worst-time">--</div>
+        <span class="text-xs text-rose-400 font-bold"><i class="fa-solid fa-triangle-exclamation"></i> Bottleneck</span>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1" id="kpi-worst-time-sub">Ca đông nhất tuần</div>
+    </div>
+  </section>
+
+  <!-- MIDDLE ROW: HEATMAP + RECOMMENDATION -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+    <!-- Current Schedule Heatmap (8 cols) -->
+    <div class="lg:col-span-8 bg-darkpanel border border-darkborder rounded-xl p-5 shadow-lg">
+      <div class="flex justify-between items-center pb-4 mb-4 border-b border-darkborder">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-fire text-amber-500"></i> Current Schedule Heatmap
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">Số lượng sinh viên có mặt trên giảng đường theo Ca học và Thứ</p>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">Ma trận 4x6 (Ca1-Ca4 x Mon-Sat)</span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-center border-collapse">
+          <thead>
+            <tr class="text-xs font-semibold text-slate-400 border-b border-darkborder">
+              <th class="py-3 px-3 text-left w-36">Ca học / Giờ</th>
+              <th class="py-3 px-2">Mon (T2)</th>
+              <th class="py-3 px-2">Tue (T3)</th>
+              <th class="py-3 px-2">Wed (T4)</th>
+              <th class="py-3 px-2">Thu (T5)</th>
+              <th class="py-3 px-2">Fri (T6)</th>
+              <th class="py-3 px-2">Sat (T7)</th>
+            </tr>
+          </thead>
+          <tbody id="heatmap-body">
+            <!-- JS populated -->
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 pt-3 border-t border-darkborder/60 flex items-center justify-between text-[11px] text-slate-400">
+        <div class="flex items-center gap-2">
+          <span>Thang tải sinh viên:</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-blue-950/80 border border-blue-800 inline-block"></span> &lt; 1,500</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-blue-600/70 inline-block"></span> 1,500 - 2,500</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-amber-600/80 inline-block"></span> 2,500 - 3,500</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-rose-600 inline-block"></span> &gt; 3,500 (Peak)</span>
+        </div>
+        <div class="text-slate-500 italic">*Nhấp vào ô để lọc nhanh bảng Parking View</div>
+      </div>
+    </div>
+
+    <!-- Recommendation Framework Placeholder (4 cols) -->
+    <div class="lg:col-span-4 bg-darkpanel border border-darkborder rounded-xl p-5 flex flex-col justify-between shadow-lg">
+      <div>
+        <div class="flex justify-between items-center pb-3 border-b border-darkborder mb-3">
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-wand-magic-sparkles text-cyan-400"></i> Recommendation
+          </h2>
+          <span class="text-[10px] px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 font-bold">Optimization Stub</span>
+        </div>
+        <p class="text-xs text-slate-400 mb-4">Khung đề xuất điều chỉnh lịch nhằm giảm nghẽn (Thuật toán của Optimization Engineer sẽ kết nối tuần sau).</p>
+
+        <div class="space-y-3">
+          <div class="p-3 rounded-lg bg-slate-900/90 border border-dashed border-darkborder">
+            <div class="flex items-center justify-between text-xs font-semibold text-slate-300">
+              <span class="flex items-center gap-1.5"><i class="fa-solid fa-arrows-split-up-and-left text-cyan-400"></i> Dịch chuyển lớp học</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">recommend_best_move()</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1.5">Dịch chuyển lớp từ khung giờ cao điểm sang các ca vắng (như Ca 3, Ca 4 Thứ 7) không gây xung đột phòng học.</p>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-900/90 border border-dashed border-darkborder">
+            <div class="flex items-center justify-between text-xs font-semibold text-slate-300">
+              <span class="flex items-center gap-1.5"><i class="fa-solid fa-shuffle text-amber-400"></i> Cân bằng tải P1 - P4</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">Routing</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1.5">Phân luồng sinh viên tòa A2 sang gửi ở P3 (sức chứa 6.000 xe) khi P1 và P2 vượt ngưỡng cảnh báo.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 pt-3 border-t border-darkborder">
+        <button disabled class="w-full py-2.5 px-4 rounded-lg bg-slate-800/80 border border-darkborder text-slate-400 text-xs font-bold cursor-not-allowed flex items-center justify-center gap-2">
+          <i class="fa-solid fa-play text-slate-500"></i> CHẠY TỐI ƯU HÓA (CHƯA KÍCH HOẠT)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PARKING VIEW TABLE -->
+  <section class="bg-darkpanel border border-darkborder rounded-xl p-5 shadow-lg">
+    <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center pb-4 mb-4 border-b border-darkborder gap-3">
+      <div>
+        <h2 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-square-parking text-blue-400"></i> Parking View (Tải trọng bãi xe P1 - P4)
+        </h2>
+        <p class="text-xs text-slate-400 mt-0.5">Dữ liệu thực tế từ hàm run_simulation() và build_result_table()</p>
+      </div>
+
+      <!-- Filters -->
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        <select id="filter-day" onchange="renderParkingTable()" class="bg-slate-900 border border-darkborder rounded px-2.5 py-1.5 text-slate-200 outline-none">
+          <option value="ALL">Tất cả ngày</option>
+          <option value="Mon">Mon (Thứ 2)</option>
+          <option value="Tue">Tue (Thứ 3)</option>
+          <option value="Wed">Wed (Thứ 4)</option>
+          <option value="Thu">Thu (Thứ 5)</option>
+          <option value="Fri">Fri (Thứ 6)</option>
+          <option value="Sat">Sat (Thứ 7)</option>
+        </select>
+
+        <select id="filter-shift" onchange="renderParkingTable()" class="bg-slate-900 border border-darkborder rounded px-2.5 py-1.5 text-slate-200 outline-none">
+          <option value="ALL">Tất cả ca</option>
+          <option value="Ca1">Ca 1 (06:45 - 09:25)</option>
+          <option value="Ca2">Ca 2 (09:35 - 12:15)</option>
+          <option value="Ca3">Ca 3 (13:00 - 15:40)</option>
+          <option value="Ca4">Ca 4 (15:50 - 18:30)</option>
+        </select>
+
+        <select id="filter-lot" onchange="renderParkingTable()" class="bg-slate-900 border border-darkborder rounded px-2.5 py-1.5 text-slate-200 outline-none">
+          <option value="ALL">Tất cả nhà xe (P1 - P4)</option>
+          <option value="P1">P1 (3.000 chỗ)</option>
+          <option value="P2">P2 (3.000 chỗ)</option>
+          <option value="P3">P3 (6.000 chỗ)</option>
+          <option value="P4">P4 (3.000 chỗ)</option>
+        </select>
+
+        <button onclick="resetFilters()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-darkborder transition">
+          <i class="fa-solid fa-rotate-left"></i> Xóa lọc
+        </button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse text-xs md:text-sm">
+        <thead>
+          <tr class="text-slate-400 border-b border-darkborder bg-slate-900/60 font-semibold">
+            <th class="py-3 px-4">Day</th>
+            <th class="py-3 px-4">Shift</th>
+            <th class="py-3 px-4">Parking Lot</th>
+            <th class="py-3 px-4 text-right">Demand</th>
+            <th class="py-3 px-4 text-right">Capacity</th>
+            <th class="py-3 px-4 text-center">Tải trọng (%)</th>
+            <th class="py-3 px-4 text-center">Trạng thái (Status)</th>
+          </tr>
+        </thead>
+        <tbody id="parking-table-body" class="divide-y divide-darkborder">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex justify-between items-center text-xs text-slate-400 mt-4 pt-3 border-t border-darkborder">
+      <div id="table-record-count">Đang tải dữ liệu...</div>
+      <div class="flex items-center gap-3">
+        <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-emerald-400"></span> &lt; 85% OK</span>
+        <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-amber-400"></span> 85% - 100% Cảnh báo</span>
+        <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-rose-500"></span> &gt; 100% BOTTLENECK</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- JAVASCRIPT ENGINE -->
+  <script>
+    const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const SHIFT_TIMES = {
+      "Ca1": "06:45 - 09:25",
+      "Ca2": "09:35 - 12:15",
+      "Ca3": "13:00 - 15:40",
+      "Ca4": "15:50 - 18:30"
+    };
+
+    let currentPayload = null;
+
+    async function fetchDashboardData() {
+      const scenario = document.getElementById('scenario-selector').value;
+      const direction = document.getElementById('direction-selector').value;
+
+      try {
+        const response = await fetch(`/api/dashboard?scenario=${scenario}&direction=${direction}`);
+        if (!response.ok) throw new Error("Không thể tải API backend");
+        currentPayload = await response.json();
+        renderAll();
+      } catch (err) {
+        console.warn("Lỗi fetch dữ liệu backend:", err);
+      }
+    }
+
+    function renderAll() {
+      if (!currentPayload) return;
+      renderKPIs(currentPayload.kpi);
+      renderHeatmap(currentPayload.heatmap);
+      renderParkingTable();
+    }
+
+    function renderKPIs(kpi) {
+      document.getElementById('kpi-sessions').innerText = kpi.total_sessions.toLocaleString('vi-VN');
+      document.getElementById('kpi-students').innerText = kpi.total_students.toLocaleString('vi-VN');
+      document.getElementById('kpi-peak-demand').innerText = kpi.peak_demand.value.toLocaleString('vi-VN') + ' SV';
+      document.getElementById('kpi-peak-demand-sub').innerText = `${kpi.peak_demand.day} - ${kpi.peak_demand.shift}`;
+      
+      document.getElementById('kpi-worst-parking').innerText = kpi.worst_parking.lot;
+      document.getElementById('kpi-worst-rate').innerText = `${kpi.worst_parking.utilization_pct}%`;
+      document.getElementById('kpi-worst-parking-sub').innerText = `${kpi.worst_parking.day} (${kpi.worst_parking.shift})`;
+
+      document.getElementById('kpi-worst-time').innerText = `${kpi.worst_day_time.day} - ${kpi.worst_day_time.shift}`;
+      document.getElementById('kpi-worst-time-sub').innerText = `Tải bãi xe cao nhất tuần`;
+    }
+
+    function renderHeatmap(heatmapData) {
+      const tbody = document.getElementById('heatmap-body');
+      tbody.innerHTML = '';
+
+      ['Ca1', 'Ca2', 'Ca3', 'Ca4'].forEach(shift => {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-darkborder/50 hover:bg-slate-900/30 transition';
+
+        const th = document.createElement('td');
+        th.className = 'py-3 px-3 text-left font-semibold text-slate-300 bg-slate-900/40';
+        th.innerHTML = `<div class="font-bold text-white">${shift}</div><div class="text-[10px] text-slate-500">${SHIFT_TIMES[shift]}</div>`;
+        tr.appendChild(th);
+
+        DAY_LABELS.forEach(day => {
+          const td = document.createElement('td');
+          td.className = 'p-1.5';
+          const val = (heatmapData[day] && heatmapData[day][shift]) || 0;
+
+          let colorClass = 'bg-slate-900/70 border-slate-800 text-slate-400';
+          if (val > 3500) colorClass = 'bg-rose-950/80 border-rose-600 text-rose-300 font-bold';
+          else if (val > 2500) colorClass = 'bg-amber-950/70 border-amber-600 text-amber-300 font-semibold';
+          else if (val > 1500) colorClass = 'bg-blue-900/60 border-blue-600 text-blue-200';
+
+          td.innerHTML = `
+            <div onclick="selectHeatmapCell('${day}', '${shift}')"
+                 title="${day} ${shift}: ${val} SV"
+                 class="p-2.5 rounded-lg border transition-all cursor-pointer hover:scale-105 hover:shadow-md ${colorClass}">
+              <div class="text-sm">${val.toLocaleString('vi-VN')}</div>
+              <div class="text-[10px] opacity-75">SV có mặt</div>
+            </div>
+          `;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    function selectHeatmapCell(day, shift) {
+      document.getElementById('filter-day').value = day;
+      document.getElementById('filter-shift').value = shift;
+      renderParkingTable();
+      document.getElementById('parking-table-body').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function renderParkingTable() {
+      if (!currentPayload || !currentPayload.parking_view) return;
+      const dayFilter = document.getElementById('filter-day').value;
+      const shiftFilter = document.getElementById('filter-shift').value;
+      const lotFilter = document.getElementById('filter-lot').value;
+      const tbody = document.getElementById('parking-table-body');
+      tbody.innerHTML = '';
+
+      const list = currentPayload.parking_view.filter(item => {
+        const matchDay = (dayFilter === 'ALL' || item.day === dayFilter);
+        const matchShift = (shiftFilter === 'ALL' || item.shift === shiftFilter);
+        const matchLot = (lotFilter === 'ALL' || item.parking_lot === lotFilter);
+        return matchDay && matchShift && matchLot;
+      });
+
+      document.getElementById('table-record-count').innerText = `Hiển thị ${list.length} / ${currentPayload.parking_view.length} bản ghi`;
+
+      list.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-900/50 transition';
+
+        const pct = item.utilization_pct;
+        let statusBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">Bình thường</span>`;
+        let barColor = 'bg-emerald-400';
+
+        if (pct > 100 || item.status === 'BOTTLENECK') {
+          statusBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">BOTTLENECK</span>`;
+          barColor = 'bg-rose-500';
+        } else if (pct >= 85) {
+          statusBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-400 border border-amber-800">Cảnh báo</span>`;
+          barColor = 'bg-amber-400';
+        }
+
+        tr.innerHTML = `
+          <td class="py-3 px-4 font-semibold text-slate-300">${item.day}</td>
+          <td class="py-3 px-4 text-slate-400 font-medium">${item.shift}</td>
+          <td class="py-3 px-4"><span class="px-2 py-0.5 rounded bg-slate-800 font-mono font-bold text-cyan-400 border border-slate-700">${item.parking_lot}</span></td>
+          <td class="py-3 px-4 text-right font-mono font-bold text-white">${item.demand.toLocaleString('vi-VN')}</td>
+          <td class="py-3 px-4 text-right font-mono text-slate-400">${item.capacity.toLocaleString('vi-VN')}</td>
+          <td class="py-3 px-4 w-44">
+            <div class="flex items-center gap-2">
+              <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden border border-slate-700">
+                <div class="h-full ${barColor}" style="width: ${Math.min(pct, 100)}%"></div>
+              </div>
+              <span class="font-mono text-xs font-bold w-10 text-right">${pct}%</span>
+            </div>
+          </td>
+          <td class="py-3 px-4 text-center">${statusBadge}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function resetFilters() {
+      document.getElementById('filter-day').value = 'ALL';
+      document.getElementById('filter-shift').value = 'ALL';
+      document.getElementById('filter-lot').value = 'ALL';
+      renderParkingTable();
+    }
+
+    window.addEventListener('DOMContentLoaded', fetchDashboardData);
+  </script>
+</body>
+</html>
