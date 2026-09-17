@@ -34,7 +34,6 @@ SLOT_LABELS = {
 PEAK_THRESHOLD = 0.90        # >= 90%  va <= 100%  -> PEAK
 BOTTLENECK_THRESHOLD = 1.0   # > 100%              -> BOTTLENECK
 
-# Sai so khi so sanh 2 so thuc
 EPS = 1e-9
 
 # DOC CSV
@@ -67,7 +66,6 @@ def validate_dataset(data: Dict[str, List[dict]]) -> None:
         "schedule_id", "class_id",
         "day_of_week", "day_vn", "shift",
         "building", "num_students", "motorbike_ratio",
-        # Bat buoc cho Tuan 5
         "arrival_window_start", "arrival_window_end",
         "departure_window_start", "departure_window_end",
     ]
@@ -111,10 +109,9 @@ def time_to_minutes(time_string: str) -> int:
 def build_window_slot_map(
     schedule: List[dict],
 ) -> Tuple[
-    Dict[Tuple[str, str, str], str],   
-    Dict[str, Tuple[str, str]],        
+    Dict[Tuple[str, str, str], str],   # (kind, start, end) -> slot
+    Dict[str, Tuple[str, str]],        # slot -> (start som nhat, end muon nhat)
 ]:
-
     window_slot_map: Dict[Tuple[str, str, str], str] = {}
     slot_bounds: Dict[str, List[str]] = {}
 
@@ -184,12 +181,13 @@ def build_building_flows(
     Dict[Tuple[str, str, str], float],
     Dict[str, Tuple[str, str]],
 ]:
+
     incoming: Dict[Tuple[str, str, str], float] = defaultdict(float)
     outgoing: Dict[Tuple[str, str, str], float] = defaultdict(float)
 
     window_slot_map, slot_bounds = build_window_slot_map(schedule)
 
-    # SCHEDULE
+    # SCHEDULE 
     for row in schedule:
         day = row["day_of_week"]
         building = row["building"]
@@ -219,7 +217,7 @@ def build_building_flows(
             raise ValueError(f"Khong tim thay slot cho departure window {departure_key[1]}-{departure_key[2]}")
         outgoing[(day, window_slot_map[departure_key], building)] += vehicles
 
-    # EVENTS (bat/tat duoc)
+    # EVENTS (bat/tat duoc) 
     if include_events:
         event_shift_slot_map = build_event_shift_slot_map()
 
@@ -405,8 +403,7 @@ def run_simulation_from_data(
 
         results.append({
             "day": day,
-            "slot": slot,
-            "slot_window": slot_bounds.get(slot),
+            "shift": slot,
             "lot_id": lot_id,
             "incoming": incoming,
             "outgoing": outgoing,
@@ -478,7 +475,6 @@ def move_classes(
     n_classes: int = 1,
     seed: int = 42,
 ) -> Tuple[List[dict], List[str]]:
-
     if to_day not in DAY_ORDER:
         raise ValueError(f"to_day khong hop le: {to_day}")
 
@@ -545,7 +541,7 @@ def compare_before_after(
 
 def _sort_key(row: dict):
     day_idx = DAY_ORDER.index(row["day"]) if row["day"] in DAY_ORDER else 99
-    slot_idx = SLOT_ORDER.index(row["slot"]) if row["slot"] in SLOT_ORDER else 99
+    slot_idx = SLOT_ORDER.index(row["shift"]) if row["shift"] in SLOT_ORDER else 99
     lot_idx = PARKING_LOTS.index(row["lot_id"]) if row["lot_id"] in PARKING_LOTS else 99
     return (day_idx, slot_idx, lot_idx)
 
@@ -569,13 +565,21 @@ COLUMN_HEADERS = [
 COLUMN_ALIGN = ["<", "<", "<", ">", ">", ">", ">", ">", ">", ">", "<", "<"]
 
 
-def format_shift(result: dict) -> str:
-    slot = result["slot"]
-    label = SLOT_LABELS.get(slot, slot)
-    window = result.get("slot_window")
-    if window:
-        return f"{slot} {label} ({window[0]}-{window[1]})"
-    return f"{slot} {label}"
+def get_slot_windows(schedule: List[dict]) -> Dict[str, Tuple[str, str]]:
+    _, slot_bounds = build_window_slot_map(schedule)
+    return slot_bounds
+
+
+def format_slot_legend(slot_windows: Dict[str, Tuple[str, str]]) -> List[str]:
+    lines = []
+    for slot in SLOT_ORDER:
+        label = SLOT_LABELS.get(slot, slot)
+        window = slot_windows.get(slot)
+        if window:
+            lines.append(f"  {slot} = {label} ({window[0]}-{window[1]})")
+        else:
+            lines.append(f"  {slot} = {label}")
+    return lines
 
 
 def format_percent(value: float) -> str:
@@ -587,7 +591,7 @@ def format_percent(value: float) -> str:
 def result_to_row(result: dict) -> List[str]:
     return [
         result["day"],
-        format_shift(result),
+        result["shift"],
         result["lot_id"],
         str(round(result["incoming"])),
         str(round(result["outgoing"])),
@@ -618,9 +622,18 @@ def render_table(headers: List[str], rows: List[List[str]]) -> List[str]:
     return lines
 
 
-def print_report(results: List[dict], scenario: str, title: str = "Output") -> None:
+def print_report(
+    results: List[dict],
+    scenario: str,
+    title: str = "Output",
+    slot_windows: Optional[Dict[str, Tuple[str, str]]] = None,
+) -> None:
     print(title)
     print(f"(Scenario: {scenario})")
+    if slot_windows:
+        print("Chu thich khung giao ca (Shift):")
+        for line in format_slot_legend(slot_windows):
+            print(line)
     rows = [result_to_row(result) for result in results]
     for line in render_table(COLUMN_HEADERS, rows):
         print(line)
@@ -635,7 +648,6 @@ def print_report(results: List[dict], scenario: str, title: str = "Output") -> N
 
 
 def save_csv(rows: List[dict], out_path: Path) -> None:
-    """rows: list ket qua da gan them khoa 'scenario'."""
     with out_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Kịch bản"] + COLUMN_HEADERS)
@@ -681,6 +693,8 @@ def main():
 
     do_whatif = bool(args.move_from and args.move_to and args.move_n > 0)
 
+    slot_windows = get_slot_windows(data["schedule"])
+
     all_results: List[dict] = []
 
     for scenario in scenarios:
@@ -693,7 +707,11 @@ def main():
             [r for r in before if r["status"] in ("PEAK", "BOTTLENECK")]
             if args.only_bottleneck else before
         )
-        print_report(shown, scenario, "Output" if not do_whatif else "Output - BEFORE")
+        print_report(
+            shown, scenario,
+            "Output" if not do_whatif else "Output - BEFORE",
+            slot_windows,
+        )
         print()
 
         all_results.extend({**r, "scenario": scenario} for r in shown)
@@ -716,7 +734,7 @@ def main():
                 if args.only_bottleneck else after
             )
             print(f"Da chuyen {len(moved)} lop tu {args.move_from} sang {args.move_to}.")
-            print_report(shown_after, scenario, "Output - AFTER")
+            print_report(shown_after, scenario, "Output - AFTER", slot_windows)
             print()
 
             all_results.extend(
