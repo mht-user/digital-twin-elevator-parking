@@ -1,20 +1,3 @@
-"""
-dashboard_data.py (v3)
-=========================================================================
-Ghep noi run_simulation_from_data() (Simulation Engineer, ban chinh thuc)
-thanh dung 3 khoi du lieu Front-end can:
-    - heatmap      -> "Current Schedule Heatmap"
-    - kpi          -> "KPI"
-    - parking_view -> "Parking View"
-
-Khong dung pandas - lam viec truc tiep tren List[dict] cho khop voi
-kieu du lieu that su cua run_simulation.py ban chot.
-
-Cach chay:
-    python3 dashboard_data.py --scenario Normal
-    python3 dashboard_data.py --scenario Worst --no-events
-"""
-
 import argparse
 import json
 from collections import defaultdict
@@ -58,7 +41,7 @@ def build_kpi(schedule: list, parking_view: list) -> dict:
         "day": worst_row["day"],
         "shift": worst_row["shift"],
         "direction": worst_row["bottleneck_direction"],
-        "utilization_pct": round(worst_row["worst_util"] * 100),
+        "utilization_pct": round(worst_row["worst_util"] * 100, 1),
     }
     worst_day_time = {"day": worst_row["day"], "shift": worst_row["shift"]}
 
@@ -71,23 +54,32 @@ def build_kpi(schedule: list, parking_view: list) -> dict:
     }
 
 
-def build_parking_view(results: list) -> list:
-    """Giu nguyen 2 chieu checkin/checkout tach rieng - KHONG gop lam 1
-    cot 'capacity'/'utilization' chung chung nhu ban truoc (day la dung
-    gop y cua leader: phai ro rang dang do nghen o cong nao)."""
+def build_parking_view(results: list, parking_rows: list = None, scenario: str = "Normal") -> list:
+    # Sức chứa bãi đỗ xe (capacity_slots) từ parking.csv
+    cap_slots_map = {}
+    if parking_rows:
+        for r in parking_rows:
+            if r["scenario"] == scenario:
+                cap_slots_map[r["parking_lot_id"]] = int(r["capacity_slots"])
+    else:
+        cap_slots_map = {"P1": 3000, "P2": 3000, "P3": 6000, "P4": 3000}
+
     view = []
     for r in results:
+        lot = r["lot_id"]
+        p_cap = cap_slots_map.get(lot, 3000)
         view.append({
             "day": r["day"],
             "shift": r["shift"],
-            "parking_lot": r["lot_id"],
+            "parking_lot": lot,
             "incoming": r["incoming"],
             "outgoing": r["outgoing"],
+            "parking_capacity": p_cap,
             "checkin_capacity": r["checkin_capacity"],
             "checkout_capacity": r["checkout_capacity"],
-            "checkin_utilization_pct": round(r["checkin_util"] * 100),
-            "checkout_utilization_pct": round(r["checkout_util"] * 100),
-            "worst_utilization_pct": round(r["worst_util"] * 100),
+            "checkin_utilization_pct": round(r["checkin_util"] * 100, 1),
+            "checkout_utilization_pct": round(r["checkout_util"] * 100, 1),
+            "worst_utilization_pct": round(r["worst_util"] * 100, 1),
             "worst_util": r["worst_util"],
             "bottleneck_direction": r["bottleneck_direction"],
             "status": r["status"],
@@ -98,10 +90,6 @@ def build_parking_view(results: list) -> list:
 def build_dashboard_payload(schedule=None, events=None, parking=None,
                              scenario: str = "Normal", include_events: bool = True,
                              dataset_dir: Path = DATASET_DIR) -> dict:
-    """Nhan schedule/events/parking o dang du lieu san co (list[dict]) -
-    dung khi can chay lai simulation tren schedule da toi uu (Before/After,
-    vd sau khi goi make_what_if_schedule() hoac recommend_best_move()).
-    Neu khong truyen gi, tu doc tu dataset_dir (dung cho lan chay dau)."""
     if schedule is None or events is None or parking is None:
         data = load_dataset(dataset_dir)
         schedule = data["schedule"]
@@ -109,7 +97,7 @@ def build_dashboard_payload(schedule=None, events=None, parking=None,
         parking = data["parking"]
 
     results = run_simulation_from_data(schedule, events, parking, scenario=scenario, include_events=include_events)
-    parking_view = build_parking_view(results)
+    parking_view = build_parking_view(results, parking_rows=parking, scenario=scenario)
 
     return {
         "scenario": scenario,

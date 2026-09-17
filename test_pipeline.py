@@ -1,17 +1,3 @@
-"""
-Danh sach test:
-    1. test_validate_data              - du lieu goc hop le (chay validate_data.py that)
-    2. test_normal_load                - SE chay duoc, output dung cau truc
-    3. test_simulation_consistency     - rang buoc noi tai cua moi dong ket qua
-    4. test_bottleneck_detection       - direction phai khop ben util lon hon
-                                         (KHONG hard-code "Checkout")
-    5. test_event_toggle               - include_events False/True lam doi demand
-    6. test_schedule_move_no_conflict  - MOVE that (remove + add), giu nguyen so dong
-    7. test_oe_integration             - SE -> optimizer -> SE lai, objective tot hon
-    8. test_full_pipeline              - chay lien mach ca 5 buoc
-
-"""
-
 import sys
 import math
 import subprocess
@@ -23,89 +9,28 @@ from run_simulation import (
     run_simulation_from_data,
     make_what_if_schedule,
     compare_before_after,
-    build_event_shift_slot_map,
 )
 
-# Thu muc chua code OE (Optimization Engineer), dat con duoi HERE (thu
-# muc chua chinh file test_pipeline.py nay).
-HERE = Path(__file__).resolve().parent
-OPTIMIZER_DIR = HERE / "optimize"
-
-# =========================================================================
-# CONFIG
-# =========================================================================
-
 TOL = 1e-6
-
 VALID_STATUS = {"OK", "PEAK", "BOTTLENECK"}
 VALID_DIRECTION = {"-", "Checkin", "Checkout", "Both"}
-
-# Chi bat khi dataset cua nhom dam bao Worst luon co throughput <= Normal.
 ASSERT_WORST_NOT_BETTER_THAN_NORMAL = True
-
-# SRS Phu luc 8.3: dataset phai co it nhat 1 diem nghen ngay o Normal.
-# Tat neu dang test voi dataset rut gon.
 REQUIRE_BOTTLENECK_IN_NORMAL = True
-
-# validate_data.py la SCRIPT (chay logic o top-level, SystemExit(1) khi
-# FAIL), khong phai module co ham -> chay bang subprocess, khong import.
 VALIDATOR_SCRIPT = "validate_data.py"
-
-# Cac truong KHONG duoc doi khi OE doi vi tri 1 session (chi doi
-# day_of_week/shift/room_id va 3 truong an theo room_id la
-# building/floor/room_capacity).
 IMMUTABLE_SESSION_FIELDS = ("class_id", "num_students", "motorbike_ratio", "dorm_ratio")
 ROOM_METADATA_FIELDS = ("building", "floor", "room_capacity")
 
-
 class SkipTest(Exception):
-    """Bao test khong chay duoc vi thieu dependency (khong tinh la FAIL)."""
+    pass
 
-
-# Adapter voi package OE (thu muc ./optimize/) - xem OE_optimizer_checklist.md.
-# KHONG sua bat ky file nao trong optimize/; chi goi vao 2 ham cong khai
-# se_bridge.SimulationEngineerBridge va optimizer.optimize_multi_move de
-# dung lai dung logic OE da viet va da test rieng (test_optimizer.py).
-# Neu thu muc optimize/ chua ton tai hoac thieu file, ca khoi nay roi
-# vao except ImportError/FileNotFoundError -> optimize_schedule = None
-# -> 2 test lien quan OE bao [SKIP] thay vi lam crash ca file.
 try:
-    sys.path.insert(0, str(OPTIMIZER_DIR))
-    from se_bridge import SimulationEngineerBridge  # trong optimize/
-    from optimizer import optimize_multi_move        # trong optimize/
-
-    _oe_bridge = SimulationEngineerBridge(str(HERE / "run_simulation.py"))
-
-    def optimize_schedule(schedule, events, parking, scenario="Normal"):
-        """Adapter giu nguyen hop dong cu (schedule, events, parking,
-        scenario) -> list[dict], de test_oe_integration/test_full_pipeline
-        khong can biet gi ve optimize_multi_move ben trong. `rooms` khong
-        nam trong hop dong cu nen phai tu load lai tu Dataset/ o day."""
-        data = _oe_bridge.load_dataset(HERE / "Dataset")
-        result = optimize_multi_move(
-            bridge=_oe_bridge,
-            schedule=schedule,
-            rooms=data["rooms"],
-            parking=parking,
-            events=events,
-            scenario=scenario,
-        )
-        return result.optimized_schedule
-
+    from run_optimizer import optimize_schedule
     _OPTIMIZER_IMPORT_ERROR = None
-except (ImportError, FileNotFoundError, AttributeError) as e:
+except ImportError as e:
     optimize_schedule = None
     _OPTIMIZER_IMPORT_ERROR = e
 
-
-# =========================================================================
-# Helper dung chung
-# =========================================================================
-
 def to_num(value, default=None):
-    """load_dataset() doc CSV nen MOI gia tri deu la str -> phai ep kieu
-    truoc khi so sanh so hoc (vi du '100' > '80' la True theo thu tu
-    chuoi)."""
     if value is None or value == "":
         return default
     if isinstance(value, (int, float)):
@@ -115,87 +40,56 @@ def to_num(value, default=None):
     except (TypeError, ValueError):
         return default
 
-
 def same_value(a, b) -> bool:
-    """So sanh 1 gia tri KHONG duoc doi giua before/after. Chiu duoc ca 2
-    kieu (str tu CSV, hoac so neu OE tu ep kieu roi tra ve nguyen so)."""
     na, nb = to_num(a), to_num(b)
     if na is not None and nb is not None:
         return math.isclose(na, nb, rel_tol=1e-9, abs_tol=TOL)
     return str(a) == str(b)
 
-
 def run_sim(data, schedule, scenario="Normal", include_events=True):
     return run_simulation_from_data(schedule, data["events"], data["parking"],
                                      scenario=scenario, include_events=include_events)
 
-
 def find_room_conflicts(schedule: list):
-    """Tra ve list (day, shift, room_id) bi dat > 1 lan - khong quan tam
-    2 dong co cung class_id hay khong, 1 phong khong the chua 2 buoi
-    cung luc du la cung 1 lop."""
     counter = Counter((r["day_of_week"], r["shift"], r["room_id"]) for r in schedule)
     return sorted(k for k, n in counter.items() if n > 1)
 
-
 def find_class_time_conflicts(schedule: list):
-    """Cung 1 class_id bi xep 2 buoi trong cung (day_of_week, shift)."""
     counter = Counter((r["class_id"], r["day_of_week"], r["shift"]) for r in schedule)
     return sorted(k for k, n in counter.items() if n > 1)
 
-
 def room_capacity_map(data: dict):
-    """{room_id: capacity (so)} tu rooms.csv."""
     return {r["room_id"]: to_num(r["room_capacity"]) for r in data["rooms"]}
 
-
 def room_info_map(data: dict):
-    """{room_id: row rooms.csv} de doi chieu/dong bo building/floor/room_capacity."""
     return {r["room_id"]: r for r in data["rooms"]}
 
-
 def rooms_by_building(data: dict):
-    """{building: set(room_id)} - rooms.csv la nguon that ve building cua tung phong."""
     out = defaultdict(set)
     for r in data["rooms"]:
         out[r["building"]].add(r["room_id"])
     return out
 
-
 def objective(results: list):
-    """Objective cang NHO cang tot. Tuple so sanh theo thu tu uu tien:
-        (so dong BOTTLENECK, tong phan qua tai, util lon nhat)
-    """
     n_bottleneck = sum(1 for r in results if r["status"] == "BOTTLENECK")
     overload = sum(max(0.0, r["worst_util"] - 1.0) for r in results)
     max_util = max((r["worst_util"] for r in results), default=0.0)
     return (n_bottleneck, round(overload, 9), round(max_util, 9))
 
-
 def assert_not_mutated(current: list, snapshot: list, label: str):
-    """optimize_schedule() phai tra ve schedule MOI, khong duoc sua truc
-    tiep len cac dict trong list duoc TRUYEN VAO (in-place)."""
     assert current == snapshot, (
         f"{label}: optimize_schedule() da sua truc tiep len schedule dau vao (in-place) - "
         "phai copy tung dong (vi du dict(r)) truoc khi doi, khong duoc sua thang vao dict goc")
 
-
 def assert_schedule_valid(schedule: list, baseline: list, data: dict, label: str):
-    """Bo dieu kien BAT BUOC cho 1 schedule sau MOVE / sau OPTIMIZE. Day
-    chinh la noi dung duoc trich sang OE_optimizer_checklist.md."""
     assert isinstance(schedule, list), f"{label}: phai tra ve list[dict], nhan duoc {type(schedule).__name__}"
     assert len(schedule) == len(baseline), (
         f"{label}: so session thay doi ({len(baseline)} -> {len(schedule)}), khong duoc mat/them buoi hoc")
 
-    # 1) Tap schedule_id phai giu nguyen y het (khong sinh moi/bo sot/trung)
     before_ids = Counter(r["schedule_id"] for r in baseline)
     after_ids = Counter(r["schedule_id"] for r in schedule)
-    assert after_ids == before_ids, (
-        f"{label}: tap schedule_id thay doi - khong duoc them/bot/trung. "
-        f"Mat: {sorted((before_ids - after_ids).keys())[:5]}, "
-        f"Moi/du thua: {sorted((after_ids - before_ids).keys())[:5]}")
+    assert after_ids == before_ids, f"{label}: tap schedule_id thay doi - khong duoc them/bot/trung."
 
-    # 2) Voi moi schedule_id, danh tinh buoi hoc (lop/si so/ti le) khong doi
     before_by_id = {r["schedule_id"]: r for r in baseline}
     after_by_id = {r["schedule_id"]: r for r in schedule}
     changed = []
@@ -204,18 +98,14 @@ def assert_schedule_valid(schedule: list, baseline: list, data: dict, label: str
         for f in IMMUTABLE_SESSION_FIELDS:
             if not same_value(after_row.get(f), before_row.get(f)):
                 changed.append(f"{sid}.{f}: {before_row.get(f)} -> {after_row.get(f)}")
-    assert not changed, (f"{label}: cac truong khong duoc doi lai bi doi:\n  - " + "\n  - ".join(changed[:5]))
+    assert not changed, f"{label}: cac truong khong duoc doi: {changed[:5]}"
 
-    # 3) Khong xung dot phong / khong xung dot lich cua lop
     room_conf = find_room_conflicts(schedule)
     assert not room_conf, f"{label}: xung dot phong (day, shift, room_id): {room_conf[:5]}"
 
     class_conf = find_class_time_conflicts(schedule)
     assert not class_conf, f"{label}: cung class_id trung ngay-ca: {class_conf[:5]}"
 
-    # 4) Phong phai co that trong rooms.csv, du suc chua, va metadata copy
-    #    (building/floor/room_capacity) phai dong bo dung phong moi - neu
-    #    quen dong bo, validate_data.py se FAIL o buoc sau.
     room_info = room_info_map(data)
     caps = room_capacity_map(data)
     missing_room, too_small, stale_meta = [], [], []
@@ -232,14 +122,8 @@ def assert_schedule_valid(schedule: list, baseline: list, data: dict, label: str
             if not same_value(r.get(col), info.get(col)):
                 stale_meta.append(f"{r['schedule_id']}.{col}: {r.get(col)} != rooms.csv {info.get(col)} (room {rid})")
     assert not missing_room, f"{label}: room_id khong ton tai trong rooms.csv: {missing_room[:5]}"
-    assert not too_small, f"{label}: phong khong du suc chua (num_students > room_capacity that): {too_small[:5]}"
-    assert not stale_meta, (f"{label}: metadata phong khong khop rooms.csv (quen dong bo khi doi phong):\n  - "
-                            + "\n  - ".join(stale_meta[:5]))
-
-
-# =========================================================================
-# 1. validate_data
-# =========================================================================
+    assert not too_small, f"{label}: phong khong du suc chua: {too_small[:5]}"
+    assert not stale_meta, f"{label}: metadata phong khong khop rooms.csv: {stale_meta[:5]}"
 
 def find_validator_script():
     here = Path(__file__).resolve().parent
@@ -251,18 +135,13 @@ def find_validator_script():
             return cand
     return None
 
-
 def run_validator():
-    """Chay validate_data.py bang subprocess. KHONG import: script chay
-    logic o top-level va goi SystemExit(1) khi FAIL, import se lam hong
-    test runner. Tra ve (returncode, stdout+stderr)."""
     script = find_validator_script()
     if script is None:
         raise SkipTest(f"khong tim thay {VALIDATOR_SCRIPT} (da thu ./ va ./Dataset/)")
     proc = subprocess.run([sys.executable, script.name], cwd=script.parent,
                           capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
-
 
 def test_validate_data():
     code, out = run_validator()
@@ -273,17 +152,11 @@ def test_validate_data():
     assert "STATUS: PASS" in out, f"validate_data.py exit 0 nhung khong in STATUS: PASS:\n{out[-300:]}"
     print("[PASS] test_validate_data (validate_data.py -> STATUS: PASS)")
 
-
-# =========================================================================
-# 2. Normal load
-# =========================================================================
-
 REQUIRED_FIELDS = {
     "day", "shift", "lot_id", "incoming", "outgoing",
     "checkin_capacity", "checkout_capacity", "checkin_util",
     "checkout_util", "worst_util", "bottleneck_direction", "status",
 }
-
 
 def test_normal_load():
     data = load_dataset()
@@ -296,13 +169,7 @@ def test_normal_load():
     assert all(r["incoming"] >= 0 and r["outgoing"] >= 0 for r in results), "incoming/outgoing khong duoc am"
     print(f"[PASS] test_normal_load ({len(results)} dong ket qua)")
 
-
-# =========================================================================
-# 3. Tinh nhat quan noi tai cua ket qua Simulation
-# =========================================================================
-
 def check_row_consistency(r: dict, where: str):
-    """Tra ve list cac thong bao loi cua 1 dong ket qua."""
     errs = []
     ci, co, worst = r["checkin_util"], r["checkout_util"], r["worst_util"]
     cap_in, cap_out = r["checkin_capacity"], r["checkout_capacity"]
@@ -332,7 +199,6 @@ def check_row_consistency(r: dict, where: str):
         errs.append(f"{tag}: status=OK nhung direction='{direction}' (ky vong '-')")
     return errs
 
-
 def test_simulation_consistency():
     data = load_dataset()
     checked = 0
@@ -345,16 +211,7 @@ def test_simulation_consistency():
     assert not errs, f"{len(errs)} vi pham rang buoc, vi du:\n  - " + "\n  - ".join(errs[:5])
     print(f"[PASS] test_simulation_consistency ({checked} dong deu thoa worst_util/capacity/status/direction)")
 
-
-# =========================================================================
-# 4. Bottleneck detection
-# =========================================================================
-
 def test_bottleneck_detection():
-    """SRS Phu luc 8.3 du doan checkout la diem nghen cau truc, nhung test
-    KHONG hard-code dieu do: no chi kiem tra bottleneck_direction phai
-    tuong ung voi ben co utilization lon hon. Ty le Checkout chi duoc in
-    ra de doi chieu voi du doan cua SRS."""
     data = load_dataset()
     results = run_sim(data, data["schedule"], scenario="Normal")
 
@@ -391,32 +248,11 @@ def test_bottleneck_detection():
     print(f"[PASS] test_bottleneck_detection ({len(bottlenecks)}/{len(results)} dong BOTTLENECK o Normal, "
           f"phan bo direction={dict(dist)}{extra})")
 
-
-# =========================================================================
-# 5. Event toggle
-# =========================================================================
-
 def event_slots(events) -> set:
-    """Tap (day_of_week, flow_slot) BI ANH HUONG boi event.
-
-    events.csv luu Ca-shift (Ca1..Ca4 - ca hoc), nhung ket qua mo phong
-    tra ve flow-slot (S0..S4 - khung giao ca đến/di) trong đung truong
-    "shift" (xem se_bridge.py). Phai quy doi qua build_event_shift_slot_map()
-    - dung HAM Y HET SE dung trong build_building_flows() - truoc khi so
-    sanh, neu khong se so sanh "Ca2" voi "S1"/"S2" va khong bao gio khop
-    (day la bug da tim thay o ban truoc cua file nay)."""
-    shift_slot_map = build_event_shift_slot_map()
-    slots = set()
-    for e in events:
-        arrival_slot, departure_slot = shift_slot_map[e["shift"]]
-        slots.add((e["day_of_week"], arrival_slot))
-        slots.add((e["day_of_week"], departure_slot))
-    return slots
-
+    return {(e["day_of_week"], e["shift"]) for e in events}
 
 def demand_map(results: list):
     return {(r["day"], r["shift"], r["lot_id"]): (r["incoming"], r["outgoing"]) for r in results}
-
 
 def test_event_toggle():
     data = load_dataset()
@@ -427,9 +263,6 @@ def test_event_toggle():
     off = demand_map(run_sim(data, data["schedule"], scenario="Normal", include_events=False))
     on = demand_map(run_sim(data, data["schedule"], scenario="Normal", include_events=True))
 
-    # Event co the tao ra slot hoan toan moi (ngay/ca/toa khong co lop nao
-    # hoc) -> slot do chi xuat hien khi BAT event, hop le; nguoc lai
-    # (chi xuat hien khi TAT event) la bat thuong.
     only_off = set(off) - set(on)
     assert not only_off, f"Tat event lai sinh them slot khong co khi bat event: {sorted(only_off)[:5]}"
     new_slots = set(on) - set(off)
@@ -453,22 +286,13 @@ def test_event_toggle():
           f"{f', trong do {len(new_slots)} slot moi sinh ra' if new_slots else ''}, "
           f"{len(on) - len(changed_event)} slot con lai giu nguyen)")
 
-
-# =========================================================================
-# 6. MOVE that su (remove row cu + add row moi, dung helper cua SE)
-# =========================================================================
-
 def pick_move(schedule: list, data: dict):
-    """Chon 1 MOVE hop le: uu tien doi phong trong cung slot; neu khong
-    con phong trong thi doi phong hien tai sang (day, shift) khac. Tra ve
-    (row_cu, thay_doi_dict)."""
     caps = room_capacity_map(data)
     occupied = {(r["day_of_week"], r["shift"], r["room_id"]) for r in schedule}
     by_building = rooms_by_building(data)
     all_slots = sorted({(r["day_of_week"], r["shift"]) for r in schedule})
     class_slots = {(r["class_id"], r["day_of_week"], r["shift"]) for r in schedule}
 
-    # 1) doi phong, giu nguyen slot
     for row in schedule:
         day, shift, cur_room = row["day_of_week"], row["shift"], row["room_id"]
         size = to_num(row["num_students"])
@@ -479,7 +303,6 @@ def pick_move(schedule: list, data: dict):
                 continue
             return row, {"room_id": cand}
 
-    # 2) giu phong, doi sang slot khac dang trong
     for row in schedule:
         day, shift, cur_room, cls = row["day_of_week"], row["shift"], row["room_id"], row["class_id"]
         for (d2, s2) in all_slots:
@@ -491,11 +314,7 @@ def pick_move(schedule: list, data: dict):
 
     raise SkipTest("schedule day kin - khong tim duoc MOVE hop le nao de test")
 
-
 def apply_move(schedule: list, row: dict, change: dict, data: dict):
-    """MOVE = bo dong cu (dung day_of_week/shift/building goc de tranh an
-    nham dong khac cua cung lop) + them dong moi da cap nhat vi tri, dong
-    bo lai metadata phong neu doi room_id."""
     new_row = dict(row)
     new_row.update(change)
     if "room_id" in change:
@@ -510,11 +329,7 @@ def apply_move(schedule: list, row: dict, change: dict, data: dict):
         remove_class_ids=[row["class_id"]], add_rows=[new_row],
     )
 
-
 def test_schedule_move_no_conflict():
-    """MOVE = doi phong/thoi gian cho 1 buoi: bo dong cu + them dong moi.
-    So dong schedule phai GIU NGUYEN (truoc day test chi xoa 1 buoi nen
-    len(after) == len(before) - 1, do la DELETE chu khong phai MOVE)."""
     data = load_dataset()
     schedule, events, parking = data["schedule"], data["events"], data["parking"]
 
@@ -532,17 +347,9 @@ def test_schedule_move_no_conflict():
     print(f"[PASS] test_schedule_move_no_conflict (lop {row['class_id']} {row['day_of_week']}/{row['shift']}/"
           f"{row['room_id']} -> {change}, giu nguyen {len(schedule_after)} dong, 0 xung dot)")
 
-
-# =========================================================================
-# 7. OE integration test
-# =========================================================================
-
 def test_oe_integration():
-    """SE baseline -> optimizer -> SE lai tren optimized schedule. Kiem
-    tra schedule van hop le (assert_schedule_valid) VA objective sau toi
-    uu khong te hon truoc."""
     if optimize_schedule is None:
-        raise SkipTest(f"khong import duoc package OE trong optimize/ (optimize_schedule adapter) ({_OPTIMIZER_IMPORT_ERROR})")
+        raise SkipTest(f"khong import duoc run_optimizer.optimize_schedule ({_OPTIMIZER_IMPORT_ERROR})")
 
     data = load_dataset()
     baseline_snapshot = [dict(r) for r in data["schedule"]]
@@ -568,14 +375,7 @@ def test_oe_integration():
     verdict = "tot hon" if obj_after < obj_before else "khong doi (schedule goc da toi uu hoac optimizer la stub)"
     print(f"[PASS] test_oe_integration (optimize_schedule: objective {obj_before} -> {obj_after}, {verdict})")
 
-
-# =========================================================================
-# 8. Full pipeline
-# =========================================================================
-
 def test_full_pipeline():
-    """validate_data -> run_simulation (before) -> optimizer
-       -> run_simulation (after) -> compare Before/After."""
     steps = []
     data = load_dataset()
 
@@ -591,7 +391,7 @@ def test_full_pipeline():
     steps.append("sim-before")
 
     if optimize_schedule is None:
-        raise SkipTest(f"pipeline can package OE trong optimize/ (optimize_schedule adapter) ({_OPTIMIZER_IMPORT_ERROR})")
+        raise SkipTest(f"pipeline can run_optimizer.optimize_schedule ({_OPTIMIZER_IMPORT_ERROR})")
 
     baseline_snapshot = [dict(r) for r in data["schedule"]]
     optimized = optimize_schedule(data["schedule"], data["events"], data["parking"], scenario="Normal")
@@ -613,11 +413,6 @@ def test_full_pipeline():
     n_after = sum(1 for r in cmp_after if r["status"] == "BOTTLENECK")
     print(f"[PASS] test_full_pipeline ({' -> '.join(steps)}; BOTTLENECK {n_before} -> {n_after})")
 
-
-# =========================================================================
-# Runner
-# =========================================================================
-
 TESTS = [
     test_validate_data,
     test_normal_load,
@@ -628,7 +423,6 @@ TESTS = [
     test_oe_integration,
     test_full_pipeline,
 ]
-
 
 def main():
     failed = skipped = 0
@@ -647,7 +441,6 @@ def main():
     passed = len(TESTS) - failed - skipped
     print(f"\n{passed}/{len(TESTS)} test(s) passed, {skipped} skipped, {failed} failed")
     return 1 if failed else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
