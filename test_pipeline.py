@@ -1,9 +1,4 @@
 """
-test_pipeline.py (v5)
-=========================================================================
-Pipeline test: validate_data -> run_simulation (before) -> optimizer
-               -> run_simulation (after) -> compare Before/After
-
 Danh sach test:
     1. test_validate_data              - du lieu goc hop le (chay validate_data.py that)
     2. test_normal_load                - SE chay duoc, output dung cau truc
@@ -15,19 +10,6 @@ Danh sach test:
     7. test_oe_integration             - SE -> optimizer -> SE lai, objective tot hon
     8. test_full_pipeline              - chay lien mach ca 5 buoc
 
-Chay: python3 test_pipeline.py
-
-run_optimizer.py hien tai la BAN GIA (chi copy nguyen schedule, khong toi
-uu gi) de 2 test lien quan OE chay duoc ngay. Khi OE xong code that, GHI
-DE truc tiep len run_optimizer.py (giu nguyen ten file + ten ham) - file
-test nay KHONG can sua gi them.
-
-File nay KHONG con do (introspect) nhieu ten module/ham nhu ban truoc -
-gio goi thang optimize_schedule() theo dung hop dong da chot. Neu
-run_optimizer.py chua ton tai (vi du moi clone repo, chua kip bo stub
-vao) thi 2 test lien quan OE bao [SKIP] thay vi lam crash ca file, qua 1
-try/except import DUY NHAT (khong phai "flexible adapter" do ten).
-=========================================================================
 """
 
 import sys
@@ -41,7 +23,13 @@ from run_simulation import (
     run_simulation_from_data,
     make_what_if_schedule,
     compare_before_after,
+    build_event_shift_slot_map,
 )
+
+# Thu muc chua code OE (Optimization Engineer), dat con duoi HERE (thu
+# muc chua chinh file test_pipeline.py nay).
+HERE = Path(__file__).resolve().parent
+OPTIMIZER_DIR = HERE / "optimize"
 
 # =========================================================================
 # CONFIG
@@ -74,15 +62,38 @@ class SkipTest(Exception):
     """Bao test khong chay duoc vi thieu dependency (khong tinh la FAIL)."""
 
 
-# Hop dong voi module OE - xem OE_optimizer_checklist.md.
-# Day KHONG phai "flexible adapter" (khong do ten module/ham khac) - chi
-# la 1 try/except gon de cac test SE van chay duoc neu file OE chua ton
-# tai. Mot khi da co run_optimizer.py (du la ban gia) thi nhanh except
-# nay khong con chay toi nua.
+# Adapter voi package OE (thu muc ./optimize/) - xem OE_optimizer_checklist.md.
+# KHONG sua bat ky file nao trong optimize/; chi goi vao 2 ham cong khai
+# se_bridge.SimulationEngineerBridge va optimizer.optimize_multi_move de
+# dung lai dung logic OE da viet va da test rieng (test_optimizer.py).
+# Neu thu muc optimize/ chua ton tai hoac thieu file, ca khoi nay roi
+# vao except ImportError/FileNotFoundError -> optimize_schedule = None
+# -> 2 test lien quan OE bao [SKIP] thay vi lam crash ca file.
 try:
-    from run_optimizer import optimize_schedule
+    sys.path.insert(0, str(OPTIMIZER_DIR))
+    from se_bridge import SimulationEngineerBridge  # trong optimize/
+    from optimizer import optimize_multi_move        # trong optimize/
+
+    _oe_bridge = SimulationEngineerBridge(str(HERE / "run_simulation.py"))
+
+    def optimize_schedule(schedule, events, parking, scenario="Normal"):
+        """Adapter giu nguyen hop dong cu (schedule, events, parking,
+        scenario) -> list[dict], de test_oe_integration/test_full_pipeline
+        khong can biet gi ve optimize_multi_move ben trong. `rooms` khong
+        nam trong hop dong cu nen phai tu load lai tu Dataset/ o day."""
+        data = _oe_bridge.load_dataset(HERE / "Dataset")
+        result = optimize_multi_move(
+            bridge=_oe_bridge,
+            schedule=schedule,
+            rooms=data["rooms"],
+            parking=parking,
+            events=events,
+            scenario=scenario,
+        )
+        return result.optimized_schedule
+
     _OPTIMIZER_IMPORT_ERROR = None
-except ImportError as e:
+except (ImportError, FileNotFoundError, AttributeError) as e:
     optimize_schedule = None
     _OPTIMIZER_IMPORT_ERROR = e
 
@@ -386,8 +397,21 @@ def test_bottleneck_detection():
 # =========================================================================
 
 def event_slots(events) -> set:
-    """Tap (day_of_week, shift) co su kien."""
-    return {(e["day_of_week"], e["shift"]) for e in events}
+    """Tap (day_of_week, flow_slot) BI ANH HUONG boi event.
+
+    events.csv luu Ca-shift (Ca1..Ca4 - ca hoc), nhung ket qua mo phong
+    tra ve flow-slot (S0..S4 - khung giao ca đến/di) trong đung truong
+    "shift" (xem se_bridge.py). Phai quy doi qua build_event_shift_slot_map()
+    - dung HAM Y HET SE dung trong build_building_flows() - truoc khi so
+    sanh, neu khong se so sanh "Ca2" voi "S1"/"S2" va khong bao gio khop
+    (day la bug da tim thay o ban truoc cua file nay)."""
+    shift_slot_map = build_event_shift_slot_map()
+    slots = set()
+    for e in events:
+        arrival_slot, departure_slot = shift_slot_map[e["shift"]]
+        slots.add((e["day_of_week"], arrival_slot))
+        slots.add((e["day_of_week"], departure_slot))
+    return slots
 
 
 def demand_map(results: list):
@@ -518,7 +542,7 @@ def test_oe_integration():
     tra schedule van hop le (assert_schedule_valid) VA objective sau toi
     uu khong te hon truoc."""
     if optimize_schedule is None:
-        raise SkipTest(f"khong import duoc run_optimizer.optimize_schedule ({_OPTIMIZER_IMPORT_ERROR})")
+        raise SkipTest(f"khong import duoc package OE trong optimize/ (optimize_schedule adapter) ({_OPTIMIZER_IMPORT_ERROR})")
 
     data = load_dataset()
     baseline_snapshot = [dict(r) for r in data["schedule"]]
@@ -567,7 +591,7 @@ def test_full_pipeline():
     steps.append("sim-before")
 
     if optimize_schedule is None:
-        raise SkipTest(f"pipeline can run_optimizer.optimize_schedule ({_OPTIMIZER_IMPORT_ERROR})")
+        raise SkipTest(f"pipeline can package OE trong optimize/ (optimize_schedule adapter) ({_OPTIMIZER_IMPORT_ERROR})")
 
     baseline_snapshot = [dict(r) for r in data["schedule"]]
     optimized = optimize_schedule(data["schedule"], data["events"], data["parking"], scenario="Normal")
