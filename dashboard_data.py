@@ -1,135 +1,475 @@
 """
-dashboard_data.py (v3)
+dashboard_data.py
 =========================================================================
-Ghep noi run_simulation_from_data() (Simulation Engineer, ban chinh thuc)
-thanh dung 3 khoi du lieu Front-end can:
-    - heatmap      -> "Current Schedule Heatmap"
-    - kpi          -> "KPI"
-    - parking_view -> "Parking View"
+Xuat 1 file JSON DUY NHAT gom du lieu can cho dashboard (Digital Twin
+Lite - lich hoc & bai xe NEU):
 
-Khong dung pandas - lam viec truc tiep tren List[dict] cho khop voi
-kieu du lieu that su cua run_simulation.py ban chot.
+  - meta                : thong tin chay (thoi diem, scenario, dataset,
+                           optimizer co san hay khong, so move da ap dung)
+  - summary[scenario]    : before/after cac chi so tong hop (bottleneck,
+                           overload, max util, load std...) - dung de
+                           lam card KPI
+  - grid[scenario]       : FULL GRID before/after - moi (ngay, slot,
+                           bai xe) du co phat sinh nhu cau hay khong -
+                           dung de ve heatmap/bieu do theo thoi gian
+  - event_impact         : rieng cac (ngay, slot) bi anh huong boi
+                           events.csv - so sanh demand khi TAT/BAT event
+  - daily_load[before/after] : tong SV theo ngay va theo (ngay, ca hoc)
+                           - dung ve bar chart can bang tai
+  - moves                : danh sach move OE da ap dung (neu co optimizer)
+  - reference             : bang tra cuu tinh (rooms theo building,
+                           suc chua bai xe theo scenario) cho dashboard
+                           filter/legend
 
-Cach chay:
-    python3 dashboard_data.py --scenario Normal
-    python3 dashboard_data.py --scenario Worst --no-events
+Cach chay (dat cung cap voi run_simulation.py, code OE trong ./optimize/):
+    python3 dashboard_data.py
+    python3 dashboard_data.py --scenarios Normal,Worst --output dashboard_data.json
+
+Neu thu muc optimize/ chua co (vd OE chua nop bai), script VAN CHAY duoc -
+chi la phan "after" / "moves" se bi bo qua va "meta.optimizer_available"
+= false, thay vi crash ca file.
+=========================================================================
 """
+
+from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List, Optional
 
-from run_simulation import DATASET_DIR, load_dataset, run_simulation_from_data
+from run_simulation import (
+    DAY_ORDER,
+    SLOT_ORDER,
+    build_event_shift_slot_map,
+    load_dataset,
+    run_simulation_from_data,
+    validate_dataset,
+)
 
-DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-SHIFT_LABELS = ["Ca1", "Ca2", "Ca3", "Ca4"]
+HERE = Path(__file__).resolve().parent
+OPTIMIZER_DIR = HERE / "optimize"
+
+# ---------------------------------------------------------------------
+# Adapter voi package OE (./optimize/) - cung 1 kieu voi test_pipeline.py:
+# KHONG sua file nao trong optimize/, chi goi vao 2 ham cong khai.
+# Neu thieu, dashboard van xuat duoc phan "before" (baseline), chi bo
+# qua phan "after"/"moves".
+# ---------------------------------------------------------------------
+try:
+    sys.path.insert(0, str(OPTIMIZER_DIR))
+    from se_bridge import SimulationEngineerBridge  # trong optimize/
+    from optimizer import calculate_metrics, optimize_multi_move  # trong optimize/
+
+    _OPTIMIZER_IMPORT_ERROR: Optional[Exception] = None
+except (ImportError, FileNotFoundError, AttributeError) as exc:  # pragma: no cover
+    SimulationEngineerBridge = None  # type: ignore
+    calculate_metrics = None  # type: ignore
+    optimize_multi_move = None  # type: ignore
+    _OPTIMIZER_IMPORT_ERROR = exc
+
+SCENARIOS = ("Normal", "Worst")
+DAYS_USED = [d for d in DAY_ORDER if d != "Sun"]  # dataset chi dung Mon-Sat
 
 
-def build_heatmap(schedule: list) -> dict:
-    """Tong SV (cong don 4 toa) theo (ngay, ca) -> khoi Heatmap."""
-    totals = defaultdict(int)
+def _f(value) -> float:
+    return float(value)
+
+
+def _i(value) -> int:
+    return int(float(value))
+
+
+# ---------------------------------------------------------------------
+# Grid + summary (dung chung 1 lan simulate full_grid cho ca 2 muc dich,
+# tranh goi SE 2 lan cho cung 1 schedule/scenario)
+# ---------------------------------------------------------------------
+
+def simulate_full_grid(schedule, events, parking, scenario, include_events=True):
+    return run_simulation_from_data(
+        schedule=schedule,
+        events=events,
+        parking=parking,
+        scenario=scenario,
+        include_events=include_events,
+        full_grid=True,
+    )
+
+
+def summarize(schedule, grid_results) -> dict:
+    """Metrics tong hop - dung y het cong thuc OE dang dung
+    (optimizer.calculate_metrics) neu co san; neu khong co optimizer thi
+    tu tinh lai bang cong thuc tuong duong de dashboard van co KPI."""
+    if calculate_metrics is not None:
+        return calculate_metrics(schedule, grid_results)
+
+    worst_utils = [_f(r["worst_util"]) for r in grid_results]
+    daily = {d: 0.0 for d in DAYS_USED}
+    day_shift = {(d, s): 0.0 for d in DAYS_USED for s in ("Ca1", "Ca2", "Ca3", "Ca4")}
     for row in schedule:
-        key = (row["day_of_week"], row["shift"])
-        totals[key] += int(row["num_students"])
+        d, s = row["day_of_week"], row["shift"]
+        n = _f(row["num_students"])
+        if d in daily:
+            daily[d] += n
+        if (d, s) in day_shift:
+            day_shift[(d, s)] += n
 
-    heatmap = {day: {shift: 0 for shift in SHIFT_LABELS} for day in DAY_LABELS}
-    for (day, shift), total in totals.items():
-        if day in heatmap and shift in heatmap[day]:
-            heatmap[day][shift] = total
-    return heatmap
-
-
-def build_kpi(schedule: list, parking_view: list) -> dict:
-    total_sessions = len(schedule)
-    total_students = sum(int(r["num_students"]) for r in schedule)
-
-    heatmap = build_heatmap(schedule)
-    peak_day, peak_shift, peak_value = None, None, -1
-    for day, shifts in heatmap.items():
-        for shift, value in shifts.items():
-            if value > peak_value:
-                peak_day, peak_shift, peak_value = day, shift, value
-    peak_demand = {"day": peak_day, "shift": peak_shift, "value": peak_value}
-
-    worst_row = max(parking_view, key=lambda r: r["worst_util"])
-    worst_parking = {
-        "lot": worst_row["parking_lot"],
-        "day": worst_row["day"],
-        "shift": worst_row["shift"],
-        "direction": worst_row["bottleneck_direction"],
-        "utilization_pct": round(worst_row["worst_util"] * 100),
-    }
-    worst_day_time = {"day": worst_row["day"], "shift": worst_row["shift"]}
+    def _pstdev(values):
+        values = list(values)
+        n = len(values)
+        if n == 0:
+            return 0.0
+        mean = sum(values) / n
+        return (sum((v - mean) ** 2 for v in values) / n) ** 0.5
 
     return {
-        "total_sessions": total_sessions,
-        "total_students": total_students,
-        "peak_demand": peak_demand,
-        "worst_parking": worst_parking,
-        "worst_day_time": worst_day_time,
+        "bottleneck_points": sum(r["status"] == "BOTTLENECK" for r in grid_results),
+        "peak_points": sum(r["status"] == "PEAK" for r in grid_results),
+        "total_overload_excess": sum(max(u - 1.0, 0.0) for u in worst_utils),
+        "max_worst_util": max(worst_utils, default=0.0),
+        "daily_load_std": _pstdev(daily.values()),
+        "day_shift_load_std": _pstdev(day_shift.values()),
     }
 
 
-def build_parking_view(results: list) -> list:
-    """Giu nguyen 2 chieu checkin/checkout tach rieng - KHONG gop lam 1
-    cot 'capacity'/'utilization' chung chung nhu ban truoc (day la dung
-    gop y cua leader: phai ro rang dang do nghen o cong nao)."""
-    view = []
-    for r in results:
-        view.append({
+def grid_to_json_rows(grid_results) -> List[dict]:
+    """Sap xep on dinh (ngay -> slot -> bai xe) de dashboard ve chart
+    khong bi lech thu tu giua cac lan chay."""
+    day_index = {d: i for i, d in enumerate(DAY_ORDER)}
+    slot_index = {s: i for i, s in enumerate(SLOT_ORDER)}
+
+    def key(row):
+        return (
+            day_index.get(row["day"], 99),
+            slot_index.get(row["shift"], 99),
+            row["lot_id"],
+        )
+
+    rows = sorted(grid_results, key=key)
+    return [
+        {
             "day": r["day"],
-            "shift": r["shift"],
-            "parking_lot": r["lot_id"],
-            "incoming": r["incoming"],
-            "outgoing": r["outgoing"],
-            "checkin_capacity": r["checkin_capacity"],
-            "checkout_capacity": r["checkout_capacity"],
-            "checkin_utilization_pct": round(r["checkin_util"] * 100),
-            "checkout_utilization_pct": round(r["checkout_util"] * 100),
-            "worst_utilization_pct": round(r["worst_util"] * 100),
-            "worst_util": r["worst_util"],
-            "bottleneck_direction": r["bottleneck_direction"],
+            "slot": r["shift"],  # flow-slot S0..S4 (KHONG phai Ca hoc)
+            "lot_id": r["lot_id"],
+            "incoming": round(_f(r["incoming"]), 4),
+            "outgoing": round(_f(r["outgoing"]), 4),
+            "checkin_util": round(_f(r["checkin_util"]), 6),
+            "checkout_util": round(_f(r["checkout_util"]), 6),
+            "worst_util": round(_f(r["worst_util"]), 6),
             "status": r["status"],
-        })
-    return view
+            "bottleneck_direction": r["bottleneck_direction"],
+        }
+        for r in rows
+    ]
 
 
-def build_dashboard_payload(schedule=None, events=None, parking=None,
-                             scenario: str = "Normal", include_events: bool = True,
-                             dataset_dir: Path = DATASET_DIR) -> dict:
-    """Nhan schedule/events/parking o dang du lieu san co (list[dict]) -
-    dung khi can chay lai simulation tren schedule da toi uu (Before/After,
-    vd sau khi goi make_what_if_schedule() hoac recommend_best_move()).
-    Neu khong truyen gi, tu doc tu dataset_dir (dung cho lan chay dau)."""
-    if schedule is None or events is None or parking is None:
-        data = load_dataset(dataset_dir)
-        schedule = data["schedule"]
-        events = data["events"]
-        parking = data["parking"]
+# ---------------------------------------------------------------------
+# Event impact (BAT/TAT include_events tren CHINH schedule dang xet -
+# quy doi Ca-shift trong events.csv sang flow-slot S0-S4 dung cach SE
+# tu quy doi, khong so sanh tho "Ca2" voi "S1"/"S2")
+# ---------------------------------------------------------------------
 
-    results = run_simulation_from_data(schedule, events, parking, scenario=scenario, include_events=include_events)
-    parking_view = build_parking_view(results)
+def affected_event_slots(events) -> set:
+    shift_slot_map = build_event_shift_slot_map()
+    slots = set()
+    for e in events:
+        arrival_slot, departure_slot = shift_slot_map[e["shift"]]
+        slots.add((e["day_of_week"], arrival_slot))
+        slots.add((e["day_of_week"], departure_slot))
+    return slots
+
+
+def event_impact(schedule, events, parking, scenario) -> List[dict]:
+    if not events:
+        return []
+
+    slots = affected_event_slots(events)
+
+    off = simulate_full_grid(schedule, events, parking, scenario, include_events=False)
+    on = simulate_full_grid(schedule, events, parking, scenario, include_events=True)
+
+    off_map = {(r["day"], r["shift"], r["lot_id"]): r for r in off}
+    on_map = {(r["day"], r["shift"], r["lot_id"]): r for r in on}
+
+    rows = []
+    for key in sorted(on_map):
+        day, slot, lot_id = key
+        if (day, slot) not in slots:
+            continue
+        before = off_map.get(key)
+        after = on_map[key]
+        rows.append(
+            {
+                "day": day,
+                "slot": slot,
+                "lot_id": lot_id,
+                "incoming_no_event": round(_f(before["incoming"]), 4) if before else 0.0,
+                "incoming_with_event": round(_f(after["incoming"]), 4),
+                "outgoing_no_event": round(_f(before["outgoing"]), 4) if before else 0.0,
+                "outgoing_with_event": round(_f(after["outgoing"]), 4),
+                "worst_util_no_event": round(_f(before["worst_util"]), 6) if before else 0.0,
+                "worst_util_with_event": round(_f(after["worst_util"]), 6),
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------
+# Daily load breakdown (cho bar chart can bang tai theo ngay / ngay+ca)
+# ---------------------------------------------------------------------
+
+def daily_load_breakdown(schedule) -> dict:
+    by_day: Dict[str, float] = defaultdict(float)
+    by_day_shift: Dict[str, float] = defaultdict(float)
+
+    for row in schedule:
+        day = row["day_of_week"]
+        shift = row["shift"]
+        n = _f(row["num_students"])
+        by_day[day] += n
+        by_day_shift[f"{day}|{shift}"] += n
 
     return {
-        "scenario": scenario,
-        "include_events": include_events,
-        "heatmap": build_heatmap(schedule),
-        "kpi": build_kpi(schedule, parking_view),
-        "parking_view": [{k: v for k, v in row.items() if k != "worst_util"} for row in parking_view],
+        "by_day": [
+            {"day": d, "total_students": round(by_day.get(d, 0.0), 2)}
+            for d in DAYS_USED
+            if d in by_day
+        ],
+        "by_day_shift": [
+            {
+                "day": key.split("|")[0],
+                "shift": key.split("|")[1],
+                "total_students": round(value, 2),
+            }
+            for key, value in sorted(by_day_shift.items())
+        ],
     }
+
+
+# ---------------------------------------------------------------------
+# Reference tables (cho filter/legend cua dashboard)
+# ---------------------------------------------------------------------
+
+def reference_tables(data: dict) -> dict:
+    rooms_by_building: Dict[str, int] = defaultdict(int)
+    for r in data["rooms"]:
+        rooms_by_building[r["building"]] += 1
+
+    parking_by_scenario: Dict[str, List[dict]] = defaultdict(list)
+    for p in data["parking"]:
+        parking_by_scenario[p["scenario"]].append(
+            {
+                "lot_id": p["parking_lot_id"],
+                "name": p.get("name"),
+                "capacity_slots": _i(p["capacity_slots"]),
+                "max_checkin_throughput_veh_per_30min": _i(
+                    p["max_checkin_throughput_veh_per_30min"]
+                ),
+                "max_checkout_throughput_veh_per_30min": _i(
+                    p["max_checkout_throughput_veh_per_30min"]
+                ),
+            }
+        )
+
+    return {
+        "rooms_by_building": dict(sorted(rooms_by_building.items())),
+        "parking_by_scenario": {
+            scenario: sorted(lots, key=lambda r: r["lot_id"])
+            for scenario, lots in parking_by_scenario.items()
+        },
+        "num_classes": len(data["classes"]),
+        "num_schedule_rows": len(data["schedule"]),
+        "num_events": len(data["events"]),
+    }
+
+
+# ---------------------------------------------------------------------
+# Optimizer (optional) - tra ve None neu package OE khong co san
+# ---------------------------------------------------------------------
+
+def get_optimized_schedule(
+    data: dict,
+    scenario: str,
+    max_moves: int,
+    top_k: int,
+    include_events: bool,
+) -> Optional[dict]:
+    if SimulationEngineerBridge is None or optimize_multi_move is None:
+        return None
+
+    bridge = SimulationEngineerBridge(str(HERE / "run_simulation.py"))
+    result = optimize_multi_move(
+        bridge=bridge,
+        schedule=data["schedule"],
+        rooms=data["rooms"],
+        parking=data["parking"],
+        events=data["events"],
+        scenario=scenario,
+        include_events=include_events,
+        max_moves=max_moves,
+        top_k=top_k,
+    )
+    return {
+        "optimized_schedule": result.optimized_schedule,
+        "moves": result.moves,
+        "stop_reason": result.stop_reason,
+        "total_evaluated_candidates": result.total_evaluated_candidates,
+        "total_improving_candidates": result.total_improving_candidates,
+    }
+
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
+
+def build_dashboard_data(
+    dataset_dir: Path,
+    se_file: Path,
+    scenarios: List[str],
+    include_events: bool,
+    max_moves: int,
+    top_k: int,
+) -> dict:
+    data = load_dataset(dataset_dir)
+    validate_dataset(data)
+
+    optimizer_available = SimulationEngineerBridge is not None and optimize_multi_move is not None
+
+    summary: Dict[str, dict] = {}
+    grid: Dict[str, dict] = {}
+    daily_load: Dict[str, dict] = {}
+    moves_by_scenario: Dict[str, list] = {}
+    optimizer_notes: Dict[str, str] = {}
+
+    for scenario in scenarios:
+        baseline_grid = simulate_full_grid(
+            data["schedule"], data["events"], data["parking"], scenario, include_events
+        )
+        baseline_summary = summarize(data["schedule"], baseline_grid)
+
+        summary[scenario] = {"before": baseline_summary}
+        grid[scenario] = {"before": grid_to_json_rows(baseline_grid)}
+        daily_load[scenario] = {"before": daily_load_breakdown(data["schedule"])}
+
+        opt = get_optimized_schedule(data, scenario, max_moves, top_k, include_events)
+        if opt is None:
+            optimizer_notes[scenario] = (
+                f"optimize/ khong san sang ({_OPTIMIZER_IMPORT_ERROR}); "
+                "chi co du lieu 'before'."
+            )
+            continue
+
+        optimized_schedule = opt["optimized_schedule"]
+        after_grid = simulate_full_grid(
+            optimized_schedule, data["events"], data["parking"], scenario, include_events
+        )
+        after_summary = summarize(optimized_schedule, after_grid)
+
+        summary[scenario]["after"] = after_summary
+        grid[scenario]["after"] = grid_to_json_rows(after_grid)
+        daily_load[scenario]["after"] = daily_load_breakdown(optimized_schedule)
+        moves_by_scenario[scenario] = opt["moves"]
+
+    # event_impact chi can tinh tren schedule GOC (before) - muc dich la
+    # cho thay tac dong cua events.csv len demand, khong lien quan optimize.
+    primary_scenario = scenarios[0]
+    event_impact_rows = event_impact(
+        data["schedule"], data["events"], data["parking"], primary_scenario
+    )
+
+    payload = {
+        "meta": {
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "scenarios": scenarios,
+            "include_events": include_events,
+            "optimizer_available": optimizer_available,
+            "max_moves": max_moves,
+            "moves_applied": {
+                scenario: len(moves_by_scenario.get(scenario, []))
+                for scenario in scenarios
+            },
+            "optimizer_notes": optimizer_notes,
+        },
+        "summary": summary,
+        "grid": grid,
+        "event_impact": {
+            "scenario": primary_scenario,
+            "rows": event_impact_rows,
+        },
+        "daily_load": daily_load,
+        "moves": moves_by_scenario,
+        "reference": reference_tables(data),
+    }
+    return payload
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Xuat du lieu tong hop (before/after + full grid) cho dashboard"
+    )
+    parser.add_argument("--dataset-dir", default=str(HERE / "Dataset"))
+    parser.add_argument("--se-file", default=str(HERE / "run_simulation.py"))
+    parser.add_argument(
+        "--scenarios",
+        default="Normal,Worst",
+        help="Danh sach scenario, cach nhau boi dau phay (mac dinh: Normal,Worst)",
+    )
+    parser.add_argument(
+        "--no-events",
+        action="store_true",
+        help="Tat events.csv khi tinh before/after chinh (mac dinh: BAT)",
+    )
+    parser.add_argument("--max-moves", type=int, default=3)
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--output", default=str(HERE / "dashboard_data.json"))
+    args = parser.parse_args()
+
+    scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
+    invalid = [s for s in scenarios if s not in SCENARIOS]
+    if invalid:
+        parser.error(f"Scenario khong hop le: {invalid} (chi nhan {list(SCENARIOS)})")
+
+    payload = build_dashboard_data(
+        dataset_dir=Path(args.dataset_dir),
+        se_file=Path(args.se_file),
+        scenarios=scenarios,
+        include_events=not args.no_events,
+        max_moves=args.max_moves,
+        top_k=args.top_k,
+    )
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    print("=" * 78)
+    print(f"Optimizer available   : {payload['meta']['optimizer_available']}")
+    for scenario in scenarios:
+        before = payload["summary"][scenario]["before"]
+        after = payload["summary"][scenario].get("after")
+        print(f"[{scenario}]")
+        print(f"  bottleneck_points     : {before['bottleneck_points']}", end="")
+        print(f" -> {after['bottleneck_points']}" if after else " (chua optimize)")
+        if after is not None:
+            print(
+                f"  total_overload_excess : {before['total_overload_excess']:.4f} "
+                f"-> {after['total_overload_excess']:.4f}"
+            )
+            print(
+                f"  max_worst_util        : {before['max_worst_util']:.4f} "
+                f"-> {after['max_worst_util']:.4f}"
+            )
+            print(f"  moves_applied         : {payload['meta']['moves_applied'][scenario]}")
+    print(f"Event-impact rows      : {len(payload['event_impact']['rows'])}")
+    print(f"Output                 : {output_path}")
+    print("=" * 78)
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build dashboard-ready JSON from run_simulation_from_data()")
-    parser.add_argument("--scenario", default="Normal", choices=["Normal", "Worst"])
-    parser.add_argument("--no-events", action="store_true", help="Bo qua events.csv")
-    parser.add_argument("--dataset-dir", type=str, default=str(DATASET_DIR))
-    args = parser.parse_args()
-
-    payload = build_dashboard_payload(
-        scenario=args.scenario,
-        include_events=not args.no_events,
-        dataset_dir=Path(args.dataset_dir),
-    )
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    sys.exit(main())
